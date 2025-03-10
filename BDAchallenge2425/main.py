@@ -9,3 +9,4 @@ spark = SparkSession(sc)
 entry_point = 'hdfs://user/amircoli/BDAchallenge2324'
 save_point = 'hdfs://user/amircoli/Scrivania/BDA/spark2425/results/gruppo_1'
 
+blabla
