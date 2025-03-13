@@ -16,7 +16,7 @@ start_time = time()
 
 HDFS_PATH = 'hdfs:///user/user/BDAchallenge2425'
 SAVING_PATH = os.path.abspath('output')
-COLUMNS = ['LATITUDE', 'LONGITUDE', 'WND', 'TMP']
+COLUMNS = ['LATITUDE', 'LONGITUDE', 'WND', 'TMP', 'REM']
 
 try:
     os.makedirs(SAVING_PATH)
@@ -62,17 +62,6 @@ def write_to_file(filename, df):
         .mode("overwrite") \
         .save('file://{}/{}'.format(SAVING_PATH, filename))
 
-def task3(df):
-    start = time()
-    result_df = df \
-        .select(['year', 'station']) \
-        .groupBy('year', 'station') \
-        .agg(count('*').alias('num_measures')) \
-        .orderBy('year', 'station')
-    write_to_file('task3', result_df)
-    print("tempo 3 {} s.".format(time() - start_time))
-    return time() - start
-
 def task1(df):
     start = time()
     result_df = df \
@@ -108,6 +97,17 @@ def task2(df):
     print("tempo 2 {} s.".format(time() - start_time))
     return time() - start
 
+def task3(df):
+    start = time()
+    result_df = df \
+        .select(['year', 'station']) \
+        .groupBy('year', 'station') \
+        .agg(count('*').alias('num_measures')) \
+        .orderBy('year', 'station')
+    write_to_file('task3', result_df)
+    print("tempo 3 {} s.".format(time() - start_time))
+    return time() - start
+
 def run_tasks_in_threads(df):
     start_time = time()
 
@@ -122,17 +122,6 @@ def run_tasks_in_threads(df):
     thread1.join()
     thread2.join()
     thread3.join()
-
-
-
-
-
-
-
-
-
-
-
 
 
 if __name__ == '__main__':
