@@ -5,7 +5,7 @@ from time import time
 
 from pyspark import SparkContext
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import split, col, count, size, input_file_name, lit, row_number
+from pyspark.sql.functions import split, col, count, size, input_file_name, lit, row_number, regexp_extract, expr, avg, explode
 from pyspark.sql.types import FloatType
 
 from pyspark.sql import Window
@@ -14,7 +14,7 @@ sc = SparkContext.getOrCreate()
 spark = SparkSession(sc)
 start_time = time()
 
-HDFS_PATH = 'hdfs:///user/user/BDAchallenge2425'
+HDFS_PATH = 'hdfs:///user/user/dataset'
 SAVING_PATH = os.path.abspath('output')
 COLUMNS = ['LATITUDE', 'LONGITUDE', 'WND', 'TMP', 'REM']
 
@@ -29,20 +29,23 @@ def get_file_paths(path):
             .get(spark._jsc.hadoopConfiguration())
             .listStatus(spark._jvm.org.apache.hadoop.fs.Path(path))]
 
-def headers_json():
-    header_indices = list(tuple(spark.read.option("header", "true").csv(
-        '{}/{}/{}'.format(HDFS_PATH, next(iter(get_file_paths(HDFS_PATH))), 
-        next(iter(get_file_paths('{}/{}'.format(HDFS_PATH, next(iter(get_file_paths(HDFS_PATH))))))))
-    ).columns.index(c) for c in COLUMNS))
-
-    stations_by_year = {}
+def read_headers():
+    """
+    Read headers from the CSV files and return them as a dict, where the key is a tuple of the indices
+    of the columns of interest, and the value is the list of file paths
+    Note: To minimize the number of unionByName operations, we only look at the indexes of the columns
+    of interest of the subsequent queries
+    """
+    headers = {}
     for year in get_file_paths(HDFS_PATH):
-        stations_by_year[year] = get_file_paths('{}/{}'.format(HDFS_PATH, year))
-
-    return json.dumps({
-        "header_indices": header_indices,
-        "stations_by_year": stations_by_year
-    }, indent=4)
+        for station in get_file_paths('{}/{}'.format(HDFS_PATH, year)):
+            path = '{}/{}/{}'.format(HDFS_PATH, year, station)
+            header = spark.read.option("header", "true").csv(path).columns
+            # Another way to go is with smart_open:
+            # header = smart_open.smart_open('{}/{}/{}'.format(dataset_path, year, station), 'r').readline().strip()
+            key = tuple(header.index(c) for c in COLUMNS)
+            headers[key] = headers.get(key, []) + [(year, station)]
+    return headers
 
 def read_csv(files=None):
     if files is None:
@@ -50,6 +53,7 @@ def read_csv(files=None):
     
     return spark.read.format('csv') \
         .option('header', 'true') \
+        .option('enforceSchema', 'false') \
         .load(files) \
         .withColumn('file_path', input_file_name()) \
         .withColumn('year', split(col('file_path'), '/')[size(split(col('file_path'), '/')) - 2]) \
@@ -99,11 +103,34 @@ def task2(df):
 
 def task3(df):
     start = time()
+    
     result_df = df \
-        .select(['year', 'station']) \
+        .select(['year', 'station', 'REM']) \
+        .filter(col('REM').isNotNull()) \
+        .filter(col('REM').contains('HOURLY INCREMENTAL PRECIPITATION VALUES (IN)')) \
+        .withColumn('precipitation_values', 
+                   regexp_extract(col('REM'), 
+                                 'HOURLY INCREMENTAL PRECIPITATION VALUES \\(IN\\):([^,]*)', 1)) \
+        .withColumn('precipitation_values', 
+                   expr("regexp_replace(precipitation_values, 'T', '0')")) \
+        .withColumn('precipitation_array', 
+                   split(col('precipitation_values'), ' ')) \
+        .withColumn('precipitation_array', 
+                   expr("transform(precipitation_array, x -> case when x = '' then null when x = 'T' then '0' else x end)")) \
+        .withColumn('precipitation_array', 
+                   expr("filter(precipitation_array, x -> x is not null)")) \
+        .withColumn('precipitation_value', 
+                   explode(col('precipitation_array'))) \
+        .withColumn('precipitation_value', 
+                   col('precipitation_value').cast(FloatType())) \
+        .filter(col('precipitation_value').isNotNull()) \
         .groupBy('year', 'station') \
-        .agg(count('*').alias('num_measures')) \
-        .orderBy('year', 'station')
+        .agg(avg('precipitation_value').alias('avg_precipitation')) \
+        .withColumn("rank", row_number().over(Window.partitionBy("year").orderBy(col("avg_precipitation").asc(), col("station").asc()))) \
+        .filter(col("rank") <= 10) \
+        .drop("rank") \
+        .orderBy(col("year").asc(), col("station").asc()).limit(10)
+    
     write_to_file('task3', result_df)
     print("tempo 3 {} s.".format(time() - start_time))
     return time() - start
@@ -125,17 +152,15 @@ def run_tasks_in_threads(df):
 
 
 if __name__ == '__main__':
-    headers_data = json.loads(headers_json())
-    
+    headers = read_headers()
     dfs = []
-    for year, stations in headers_data["stations_by_year"].items():
-        files = ['{}/{}/{}'.format(HDFS_PATH, year, station) for station in stations]
+    for stations in headers.values():
+        files = ['{}/{}/{}'.format(HDFS_PATH, year, station) for year, station in stations]
         dfs.append(read_csv(files))
-
-    final_df = dfs[0]
+    union_df = dfs[0]
     for df in dfs[1:]:
-        final_df = final_df.unionByName(df, allowMissingColumns=True)
+        union_df = union_df.unionByName(df, allowMissingColumns=True)
 
-    run_tasks_in_threads(final_df)
+    run_tasks_in_threads(union_df)
 
     print(f"total time {time() - start_time} seconds.")
