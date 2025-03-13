@@ -43,8 +43,6 @@ def get_headers():
         for station in get_file_paths('{}/{}'.format(HDFS_PATH, year)):
             path = '{}/{}/{}'.format(HDFS_PATH, year, station)
             header = spark.read.option("header", "true").csv(path).columns
-            # Another way to go is with smart_open:
-            # header = smart_open.smart_open('{}/{}/{}'.format(dataset_path, year, station), 'r').readline().strip()
             key = tuple(header.index(c) for c in COLUMNS)
             headers[key] = headers.get(key, []) + [(year, station)]
     return headers
