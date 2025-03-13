@@ -24,17 +24,19 @@ except OSError:
     pass
 
 def get_file_paths(path):
+    """
+    Restituisce un elenco dei nomi dei file presenti nel percorso specificato su HDFS.
+    """
     return [files.getPath().getName() 
             for files in spark._jvm.org.apache.hadoop.fs.FileSystem
             .get(spark._jsc.hadoopConfiguration())
             .listStatus(spark._jvm.org.apache.hadoop.fs.Path(path))]
 
-def read_headers():
+def get_headers():
     """
-    Read headers from the CSV files and return them as a dict, where the key is a tuple of the indices
-    of the columns of interest, and the value is the list of file paths
-    Note: To minimize the number of unionByName operations, we only look at the indexes of the columns
-    of interest of the subsequent queries
+    Legge gli header dai file CSV in HDFS e restituisce un dizionario.
+    La chiave è una tupla con gli indici delle colonne di interesse,
+    il valore è una lista di percorsi dei file che hanno lo stesso schema di colonne.
     """
     headers = {}
     for year in get_file_paths(HDFS_PATH):
@@ -48,6 +50,9 @@ def read_headers():
     return headers
 
 def read_csv(files=None):
+    """
+    Legge i file CSV specificati e restituisce un DataFrame Spark.
+    """
     if files is None:
         files = '{}//.csv'.format(HDFS_PATH)
     
@@ -60,6 +65,9 @@ def read_csv(files=None):
         .withColumn('station', split(col('file_path'), '/')[size(split(col('file_path'), '/')) - 1].substr(1, 11))
 
 def write_to_file(filename, df):
+    """
+    Scrive un DataFrame in un file CSV nella cartella di output.
+    """
     df.write \
         .format("csv") \
         .option("header", "true") \
@@ -67,6 +75,10 @@ def write_to_file(filename, df):
         .save('file://{}/{}'.format(SAVING_PATH, filename))
 
 def task1(df):
+    """
+    Analizza la temperatura media nelle coordinate specificate,
+    conta le occorrenze e salva i primi 10 risultati.
+    """
     start = time()
     result_df = df \
         .withColumn("LATITUDE", col('LATITUDE').cast(FloatType())) \
@@ -86,6 +98,9 @@ def task1(df):
     return time() - start
 
 def task2(df):
+    """
+    Analizza i dati del vento (WND) e restituisce la stazione con il numero maggiore di occorrenze per ogni valore di WND.
+    """
     start = time()
     result_df = df \
         .select(['station', 'WND']) \
@@ -102,6 +117,9 @@ def task2(df):
     return time() - start
 
 def task3(df):
+    """
+    Analizza le precipitazioni medie annuali per ogni stazione e restituisce le 10 con il valore più basso.
+    """
     start = time()
     
     result_df = df \
@@ -136,8 +154,9 @@ def task3(df):
     return time() - start
 
 def run_tasks_in_threads(df):
-    start_time = time()
-
+    """
+    Esegue le tre task in parallelo utilizzando thread separati.
+    """
     thread1 = threading.Thread(target=task1, args=(df,))
     thread2 = threading.Thread(target=task2, args=(df,))
     thread3 = threading.Thread(target=task3, args=(df,))
@@ -152,7 +171,7 @@ def run_tasks_in_threads(df):
 
 
 if __name__ == '__main__':
-    headers = read_headers()
+    headers = get_headers()
     dfs = []
     for stations in headers.values():
         files = ['{}/{}/{}'.format(HDFS_PATH, year, station) for year, station in stations]
